@@ -1,0 +1,1 @@
+"""ZYRA Backend - Rede Social Fitness"""
