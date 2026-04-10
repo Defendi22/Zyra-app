@@ -1,6 +1,6 @@
 """
 ZYRA Backend — FastAPI Main Application
-Roteamento por domínio, middleware de auth + rate limit, error handling.
+Roteamento por domínio, middleware de auth + rate limit, error handling...
 """
 
 import time
