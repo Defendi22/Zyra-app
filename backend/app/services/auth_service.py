@@ -105,11 +105,8 @@ class AuthService:
 
             # Try to fetch user from Supabase
             try:
-                user_data = supabase_client.select_all(
-                    "profiles",
-                    filters={"email": email},
-                    limit=1,
-                )
+                user_data = supabase_client.service_client.table("profiles").select("*").eq("email", email).limit(1).execute().data
+                
                 if not user_data:
                     logger.warning(f"User not found: {email}")
                     raise ValueError("Invalid email or password")

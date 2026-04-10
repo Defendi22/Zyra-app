@@ -21,9 +21,9 @@ logger = logging.getLogger("zyra.auth")
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """
-    Valida JWT token do Supabase no header Authorization: Bearer <token>
-    Endpoints públicos (sem token) continuam funcionando — use @require_auth no endpoint
-    Verifica Redis blacklist para logout
+    Valida JWT token no header Authorization: Bearer <token>
+    Sempre inicializa request.state.user_id (None se sem token)
+    Endpoints protegidos usam Depends(require_auth)
     """
 
     BEARER_PREFIX = "Bearer "
@@ -37,31 +37,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: Request, call_next: Callable) -> any:
-        # Paths públicos — pular validação
+        # Sempre inicializar state — evita AttributeError nos outros middlewares
+        request.state.user_id = None
+        request.state.user = None
+
+        # Paths públicos — pular validação de token
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
 
         # Extrair token do header
         auth_header = request.headers.get("Authorization", "")
-        logger.debug(f"Authorization header: {auth_header[:50] if auth_header else 'MISSING'}")
+        logger.debug(f"Auth header presente: {bool(auth_header)} | path: {request.url.path}")
 
         if not auth_header.startswith(self.BEARER_PREFIX):
-            # Token ausente — continuar (endpoint pode ser público)
-            # Se o endpoint precisar de auth, use @require_auth
-            logger.debug(f"No token for {request.url.path}")
-            request.state.user_id = None
-            request.state.user = None
+            # Sem token — continuar (require_auth vai rejeitar se necessário)
             return await call_next(request)
 
-        token = auth_header[len(self.BEARER_PREFIX) :]
+        token = auth_header[len(self.BEARER_PREFIX):]
 
         try:
-            # Verificar se token está na blacklist (logout)
+            # Verificar blacklist no Redis (logout)
             blacklist_key = f"token_blacklist:{token}"
             try:
                 is_blacklisted = await redis_client.exists(blacklist_key)
                 if is_blacklisted:
-                    logger.warning("❌ Token invalidado (logout)")
+                    logger.warning("Token na blacklist (logout)")
                     return JSONResponse(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         content={"detail": "Token invalidado"},
@@ -69,28 +69,25 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     )
             except Exception as e:
                 logger.warning(f"Redis check failed (non-critical): {e}")
-                # Continuar mesmo se Redis falha
 
-            # Decodificar JWT do Supabase
+            # Decodificar JWT
             decoded = jwt.decode(
                 token,
                 settings.SUPABASE_ANON_KEY,
                 algorithms=["HS256"],
             )
 
-            # Extrair user_id (sub = subject claim)
             user_id = decoded.get("sub")
             if not user_id:
-                raise ValueError("Token missing 'sub' claim")
+                raise ValueError("Token sem claim 'sub'")
 
-            # Adicionar user_id ao request state
+            # Injetar no request.state
             request.state.user_id = user_id
             request.state.user = decoded
-
-            logger.debug(f"✅ Auth OK — user_id: {user_id}")
+            logger.debug(f"Auth OK — user_id: {user_id}")
 
         except ExpiredSignatureError:
-            logger.warning(f"❌ Token expirado")
+            logger.warning("Token expirado")
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "Token expirado"},
@@ -98,7 +95,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         except DecodeError as e:
-            logger.warning(f"❌ Token inválido: {e}")
+            logger.warning(f"Token inválido: {e}")
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "Token inválido"},
@@ -106,7 +103,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         except Exception as e:
-            logger.error(f"❌ Erro ao validar token: {e}", exc_info=True)
+            logger.error(f"Erro ao validar token: {e}", exc_info=True)
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"detail": "Erro na autenticação"},
@@ -117,11 +114,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 def require_auth(request: Request) -> str:
     """Dependency para garantir que user_id existe"""
-    if not request.state.user_id:
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
         from fastapi import HTTPException
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Autenticação requerida",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return request.state.user_id
+    return user_id

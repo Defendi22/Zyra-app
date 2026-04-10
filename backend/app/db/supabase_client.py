@@ -61,9 +61,9 @@ class SupabaseClient:
 
     # ==================== INSERT ====================
 
-    def insert_one(self, table: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """INSERT um registro"""
-        response = self.client.table(table).insert([data]).execute()
+    def insert_one(self, table: str, data: dict) -> dict:
+        """INSERT um registro — usa service role para bypass RLS"""
+        response = self.service_client.table(table).insert([data]).execute()
         return response.data[0] if response.data else None
 
     def insert_many(self, table: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -98,8 +98,13 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # ==================== MIDDLEWARE ====================
+# ATENÇÃO: Starlette executa middlewares na ordem INVERSA da adição.
+# O último add_middleware() é o primeiro a executar na requisição.
+# Ordem de execução: Auth → RateLimit → Logging → TrustedHost → CORS
 
-# 1. CORS (deve ser first)
+# 1. CORS — executa por último (mais externo)
+# ==================== MIDDLEWARE ====================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -108,20 +113,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Trusted Host
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=settings.ALLOWED_HOSTS,
 )
 
-# 3. Logging (antes de Auth para capturar todas as requests)
-app.add_middleware(LoggingMiddleware)
-
-# 4. Rate Limit
-app.add_middleware(RateLimitMiddleware)
-
-# 5. Auth (valida JWT)
 app.add_middleware(AuthMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(LoggingMiddleware)
 
 # ==================== ROUTES ====================
 
