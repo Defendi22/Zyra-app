@@ -1,7 +1,7 @@
 """
 Middleware de Autenticação — Valida JWT tokens do Supabase
 Injeta user_id no request.state para uso em endpoints
-Verifica token blacklist no Redis para logout
+Verifica token blacklist no Redis para logout.
 """
 
 import logging
