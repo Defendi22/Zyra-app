@@ -3,68 +3,88 @@ Roteador de IA — Gemini Integration (Meal Analysis, Workout Plans, Coach)
 """
 
 from fastapi import APIRouter, HTTPException, status, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
-import base64
 
 from app.middleware.auth import require_auth
+from app.services.ai_service import ai_service
+from app.config import settings
 
 router = APIRouter()
+
 
 # ==================== SCHEMAS ====================
 
 class MealAnalysisRequest(BaseModel):
-    """Análise de foto de refeição"""
-    image_base64: str  # Imagem em base64
+    image_base64: str = Field(..., description="Imagem da refeição em base64")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "image_base64": "/9j/4AAQSkZJRgAB..."
+            }
+        }
 
 
 class FoodItem(BaseModel):
-    """Item de comida identificado"""
     name: str
-    quantity: str  # Ex: "200g", "1 prato"
+    quantity: str
     kcal: float
 
 
 class MealAnalysisResponse(BaseModel):
-    """Resposta de análise de refeição"""
     foods: List[FoodItem]
     total_kcal: float
-    macros: dict  # {protein_g, carbs_g, fat_g}
-    confidence: float  # 0-1
+    macros: dict
+    confidence: float
 
 
 class GenerateDietRequest(BaseModel):
-    """Gerar plano de dieta personalizado"""
-    goal: str  # 'loss' | 'gain' | 'maintenance'
-    daily_kcal: int
-    restrictions: List[str] = []  # Ex: ["vegetarian", "gluten-free"]
-    duration_days: int = 7
+    goal: str = Field(..., description="'loss' | 'gain' | 'maintenance'")
+    daily_kcal: int = Field(..., ge=1000, le=10000)
+    restrictions: List[str] = Field(default=[], description="Ex: ['vegetarian', 'gluten-free']")
+    duration_days: int = Field(default=7, ge=1, le=30)
 
-
-class GenerateDietResponse(BaseModel):
-    """Resposta com plano de dieta"""
-    id: str
-    user_id: str
-    content: str  # Plano em formato texto/json
-    calories: int
-    created_at: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "goal": "gain",
+                "daily_kcal": 3000,
+                "restrictions": [],
+                "duration_days": 7,
+            }
+        }
 
 
 class GenerateWorkoutRequest(BaseModel):
-    """Gerar plano de treino personalizado"""
-    level: str  # 'beginner' | 'intermediate' | 'advanced'
-    goal: str  # 'strength' | 'endurance' | 'hypertrophy' | 'balance'
-    equipment: List[str] = []  # Ex: ["dumbbells", "barbell"]
-    duration_days: int = 7
+    level: str = Field(..., description="'beginner' | 'intermediate' | 'advanced'")
+    goal: str = Field(..., description="'strength' | 'endurance' | 'hypertrophy' | 'balance'")
+    equipment: List[str] = Field(default=[], description="Ex: ['dumbbells', 'barbell']")
+    duration_days: int = Field(default=7, ge=1, le=30)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "level": "intermediate",
+                "goal": "hypertrophy",
+                "equipment": ["dumbbells", "barbell"],
+                "duration_days": 7,
+            }
+        }
 
 
 class CoachMessageRequest(BaseModel):
-    """Mensagem para o coach de IA"""
-    message: str
+    message: str = Field(..., min_length=1, max_length=1000)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "Quero ganhar massa muscular. Por onde começo?"
+            }
+        }
 
 
 class CoachMessageResponse(BaseModel):
-    """Resposta do coach"""
     response: str
     suggestions: List[str] = []
 
@@ -73,82 +93,105 @@ class CoachMessageResponse(BaseModel):
 
 @router.post("/analyze-meal", response_model=MealAnalysisResponse)
 async def analyze_meal(
-    request: Request,
     body: MealAnalysisRequest,
     user_id: str = Depends(require_auth),
 ):
     """
-    Analisar foto de refeição com Gemini Vision
-    - Input: imagem em base64
-    - Output: alimentos identificados, calorias totais, macros
-    - Cache: hash da imagem no Redis por 1h
+    Analisa foto de refeição com Gemini Vision.
+    Envie a imagem em base64.
+    Retorna alimentos identificados, calorias e macros.
     """
-    # TODO: Implementar integração com Gemini Vision
-    # 1. Validar base64
-    # 2. Fazer hash da imagem
-    # 3. Verificar cache no Redis
-    # 4. Se cache miss: chamar Gemini API
-    # 5. Salvar resultado no Redis
-    # 6. Retornar análise
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint em desenvolvimento",
-    )
+    if not settings.FEATURE_AI_MEAL_ANALYSIS:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Feature desativada",
+        )
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GEMINI_API_KEY não configurada",
+        )
+    try:
+        return await ai_service.analyze_meal(body.image_base64, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na análise: {str(e)}")
 
 
-@router.post("/generate-diet", response_model=GenerateDietResponse)
+@router.post("/generate-diet")
 async def generate_diet_plan(
-    request: Request,
     body: GenerateDietRequest,
     user_id: str = Depends(require_auth),
 ):
-    """
-    Gerar plano de dieta personalizado com Gemini
-    """
-    # TODO: Implementar geração de dieta
-    # 1. Pegar contexto do usuário (peso, altura, objetivo)
-    # 2. Chamar Gemini com prompt estruturado
-    # 3. Salvar plano no Supabase (diet_plans)
-    # 4. Retornar plano
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint em desenvolvimento",
-    )
+    """Gera plano de dieta personalizado com Gemini"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GEMINI_API_KEY não configurada",
+        )
+    if body.goal not in ("loss", "gain", "maintenance"):
+        raise HTTPException(status_code=400, detail="goal deve ser: loss, gain ou maintenance")
+
+    try:
+        return await ai_service.generate_diet_plan(
+            user_id=user_id,
+            goal=body.goal,
+            daily_kcal=body.daily_kcal,
+            restrictions=body.restrictions,
+            duration_days=body.duration_days,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar dieta: {str(e)}")
 
 
 @router.post("/generate-workout")
 async def generate_workout_plan(
-    request: Request,
     body: GenerateWorkoutRequest,
     user_id: str = Depends(require_auth),
 ):
-    """
-    Gerar plano de treino personalizado com Gemini
-    """
-    # TODO: Implementar geração de treino
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint em desenvolvimento",
-    )
+    """Gera plano de treino personalizado com Gemini"""
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GEMINI_API_KEY não configurada",
+        )
+    if body.level not in ("beginner", "intermediate", "advanced"):
+        raise HTTPException(status_code=400, detail="level deve ser: beginner, intermediate ou advanced")
+    if body.goal not in ("strength", "endurance", "hypertrophy", "balance"):
+        raise HTTPException(status_code=400, detail="goal deve ser: strength, endurance, hypertrophy ou balance")
+
+    try:
+        return await ai_service.generate_workout_plan(
+            user_id=user_id,
+            level=body.level,
+            goal=body.goal,
+            equipment=body.equipment,
+            duration_days=body.duration_days,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar treino: {str(e)}")
 
 
 @router.post("/coach", response_model=CoachMessageResponse)
 async def coach_chat(
-    request: Request,
     body: CoachMessageRequest,
     user_id: str = Depends(require_auth),
 ):
     """
-    Coach virtual conversacional com contexto do usuário
+    Coach virtual conversacional.
+    Mantém histórico da conversa por 24h.
     """
-    # TODO: Implementar chat com Gemini
-    # 1. Pegar histórico de mensagens do Redis
-    # 2. Pegar contexto do usuário (métricas, treinos, refeições)
-    # 3. Montar prompt com contexto
-    # 4. Chamar Gemini API
-    # 5. Salvar conversa no Redis
-    # 6. Retornar resposta
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Endpoint em desenvolvimento",
-    )
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GEMINI_API_KEY não configurada",
+        )
+    try:
+        return await ai_service.coach_chat(user_id=user_id, message=body.message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro no coach: {str(e)}")
