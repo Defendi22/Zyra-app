@@ -7,13 +7,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """
-    Variáveis de ambiente com validação via Pydantic
-    Carrega de .env na raiz do backend/
-    """
 
     # ==================== APP ====================
-    ENVIRONMENT: str = "development"  # development, staging, production
+    ENVIRONMENT: str = "development"
     DEBUG: bool = True
     API_VERSION: str = "1.0.0"
 
@@ -24,8 +20,8 @@ class Settings(BaseSettings):
     # ==================== CORS ====================
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
-        "http://localhost:8081",  # Expo
-        "exp://localhost:8081",   # Expo
+        "http://localhost:8081",
+        "exp://localhost:8081",
     ]
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "*.railway.app"]
 
@@ -33,7 +29,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
-    JWT_SECRET: str = "your-secret-key-change-in-prod"  # Para refresh tokens (opcional)
+    JWT_SECRET: str = "your-secret-key-change-in-prod"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
@@ -42,8 +38,8 @@ class Settings(BaseSettings):
 
     # ==================== CACHE ====================
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_CACHE_TTL: int = 3600  # 1 hora default
-    REDIS_RATE_LIMIT_WINDOW: int = 60  # 1 minuto
+    REDIS_CACHE_TTL: int = 3600
+    REDIS_RATE_LIMIT_WINDOW: int = 60
 
     # ==================== RATE LIMIT ====================
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
@@ -56,9 +52,10 @@ class Settings(BaseSettings):
         "/api/v1/auth/register",
     ]
 
-    # ==================== EXTERNAL APIS ====================
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    # ==================== xAI GROK ====================
+    XAI_API_KEY: str = ""
+    XAI_MODEL: str = "grok-3-mini"
+    XAI_VISION_MODEL: str = "grok-2-vision-1212"
 
     # ==================== STORAGE ====================
     R2_ACCOUNT_ID: str = ""
@@ -77,12 +74,8 @@ class Settings(BaseSettings):
         case_sensitive = True
 
     def get_cors_origins(self) -> List[str]:
-        """Retorna CORS origins baseado no environment"""
         if self.ENVIRONMENT == "production":
-            return [
-                "https://zyra.app",
-                "https://www.zyra.app",
-            ]
+            return ["https://zyra.app", "https://www.zyra.app"]
         return self.CORS_ORIGINS
 
 

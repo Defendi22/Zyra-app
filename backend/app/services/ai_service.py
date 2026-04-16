@@ -1,5 +1,5 @@
 """
-AI Service — Google Gemini (análise de refeição, planos, coach)
+AI Service — xAI Grok (coach, planos de dieta/treino, análise de refeição)
 """
 
 import json
@@ -7,9 +7,9 @@ import logging
 import hashlib
 import base64
 from datetime import datetime, timezone
-from typing import List, Optional, Dict
+from typing import List, Dict
 
-import google.generativeai as genai
+from openai import AsyncOpenAI
 
 from app.config import settings
 from app.cache.redis_client import redis_client
@@ -17,9 +17,11 @@ from app.cache.redis_client import redis_client
 logger = logging.getLogger("zyra.ai")
 
 
-def _init_gemini():
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    return genai.GenerativeModel(settings.GEMINI_MODEL)
+def _get_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
+        api_key=settings.XAI_API_KEY,
+        base_url="https://api.x.ai/v1",
+    )
 
 
 class AIService:
@@ -28,76 +30,68 @@ class AIService:
 
     @staticmethod
     async def analyze_meal(image_base64: str, user_id: str) -> Dict:
-        """
-        Analisa foto de refeição com Gemini Vision.
-        Retorna alimentos identificados, calorias e macros.
-        Usa cache Redis para evitar chamadas repetidas da mesma imagem.
-        """
-        # Hash da imagem para cache
+        """Analisa foto de refeição com Grok Vision."""
         image_hash = hashlib.md5(image_base64.encode()).hexdigest()
         cache_key = f"meal_analysis:{image_hash}"
 
-        # Verifica cache
         try:
             cached = await redis_client.get(cache_key)
             if cached:
-                logger.info(f"Cache hit para análise de refeição: {image_hash[:8]}")
+                logger.info(f"Cache hit: {image_hash[:8]}")
                 return json.loads(cached)
         except Exception as e:
             logger.warning(f"Redis cache check failed: {e}")
 
-        # Valida base64
         try:
-            image_data = base64.b64decode(image_base64)
+            base64.b64decode(image_base64)
         except Exception:
             raise ValueError("Imagem inválida — envie em formato base64")
 
-        # Chama Gemini Vision
         try:
-            model = _init_gemini()
-
-            prompt = """Analise esta foto de refeição e retorne um JSON com exatamente este formato:
+            client = _get_client()
+            response = await client.chat.completions.create(
+                model=settings.XAI_VISION_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                            },
+                            {
+                                "type": "text",
+                                "text": """Analise esta foto de refeição e retorne um JSON com exatamente este formato:
 {
-  "foods": [
-    {"name": "nome do alimento", "quantity": "quantidade estimada", "kcal": 000}
-  ],
+  "foods": [{"name": "nome", "quantity": "quantidade", "kcal": 000}],
   "total_kcal": 000,
-  "macros": {
-    "protein_g": 00,
-    "carbs_g": 00,
-    "fat_g": 00
-  },
+  "macros": {"protein_g": 00, "carbs_g": 00, "fat_g": 00},
   "confidence": 0.0
 }
-Seja preciso nas estimativas calóricas. Retorne APENAS o JSON, sem texto adicional."""
+Retorne APENAS o JSON, sem texto adicional.""",
+                            },
+                        ],
+                    }
+                ],
+            )
 
-            image_part = {
-                "mime_type": "image/jpeg",
-                "data": image_data,
-            }
-
-            response = model.generate_content([prompt, image_part])
-            text = response.text.strip()
-
-            # Remove markdown se presente
-            if text.startswith("```"):
+            text = response.choices[0].message.content.strip()
+            if "```" in text:
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
 
             result = json.loads(text)
 
-            # Salva no cache por 1 hora
             try:
                 await redis_client.set(cache_key, json.dumps(result), ttl=3600)
-            except Exception as e:
-                logger.warning(f"Redis cache save failed: {e}")
+            except Exception:
+                pass
 
-            logger.info(f"Refeição analisada para user {user_id}: {result.get('total_kcal')} kcal")
+            logger.info(f"Refeição analisada para {user_id}: {result.get('total_kcal')} kcal")
             return result
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Gemini retornou JSON inválido: {e}")
+        except json.JSONDecodeError:
             raise ValueError("Erro ao processar resposta da IA")
         except Exception as e:
             logger.error(f"Erro na análise de refeição: {e}")
@@ -113,30 +107,29 @@ Seja preciso nas estimativas calóricas. Retorne APENAS o JSON, sem texto adicio
         restrictions: List[str],
         duration_days: int = 7,
     ) -> Dict:
-        """Gera plano de dieta personalizado com Gemini"""
+        """Gera plano de dieta personalizado com Grok."""
         try:
-            model = _init_gemini()
-
+            client = _get_client()
             restrictions_text = ", ".join(restrictions) if restrictions else "nenhuma"
 
-            prompt = f"""Crie um plano de dieta detalhado em português com estas especificações:
-- Objetivo: {goal} (loss=perda de peso, gain=ganho de massa, maintenance=manutenção)
+            prompt = f"""Crie um plano de dieta detalhado em português:
+- Objetivo: {goal} (loss=perda de peso, gain=ganho de massa, maintenance=manutencao)
 - Calorias diárias: {daily_kcal} kcal
-- Restrições alimentares: {restrictions_text}
+- Restrições: {restrictions_text}
 - Duração: {duration_days} dias
 
 Retorne um JSON com este formato:
 {{
-  "summary": "resumo do plano em 2 frases",
+  "summary": "resumo em 2 frases",
   "daily_calories": {daily_kcal},
   "macros_daily": {{"protein_g": 0, "carbs_g": 0, "fat_g": 0}},
   "days": [
     {{
       "day": 1,
       "meals": [
-        {{"name": "Café da manhã", "foods": ["alimento 1", "alimento 2"], "kcal": 0}},
-        {{"name": "Almoço", "foods": ["alimento 1", "alimento 2"], "kcal": 0}},
-        {{"name": "Jantar", "foods": ["alimento 1", "alimento 2"], "kcal": 0}},
+        {{"name": "Cafe da manha", "foods": ["alimento 1"], "kcal": 0}},
+        {{"name": "Almoco", "foods": ["alimento 1"], "kcal": 0}},
+        {{"name": "Jantar", "foods": ["alimento 1"], "kcal": 0}},
         {{"name": "Lanches", "foods": ["alimento 1"], "kcal": 0}}
       ]
     }}
@@ -145,17 +138,21 @@ Retorne um JSON com este formato:
 }}
 Retorne APENAS o JSON, sem texto adicional."""
 
-            response = model.generate_content(prompt)
-            text = response.text.strip()
+            response = await client.chat.completions.create(
+                model=settings.XAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-            if text.startswith("```"):
+            text = response.choices[0].message.content.strip()
+            if "```" in text:
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
 
             plan = json.loads(text)
+            logger.info(f"Plano de dieta gerado para {user_id}: {goal}, {daily_kcal} kcal")
 
-            result = {
+            return {
                 "id": f"diet_{user_id[:8]}_{int(datetime.now().timestamp())}",
                 "user_id": user_id,
                 "goal": goal,
@@ -164,11 +161,7 @@ Retorne APENAS o JSON, sem texto adicional."""
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            logger.info(f"Plano de dieta gerado para user {user_id}: {goal}, {daily_kcal} kcal")
-            return result
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Gemini retornou JSON inválido: {e}")
+        except json.JSONDecodeError:
             raise ValueError("Erro ao processar plano de dieta")
         except Exception as e:
             logger.error(f"Erro ao gerar plano de dieta: {e}")
@@ -184,28 +177,27 @@ Retorne APENAS o JSON, sem texto adicional."""
         equipment: List[str],
         duration_days: int = 7,
     ) -> Dict:
-        """Gera plano de treino personalizado com Gemini"""
+        """Gera plano de treino personalizado com Grok."""
         try:
-            model = _init_gemini()
+            client = _get_client()
+            equipment_text = ", ".join(equipment) if equipment else "sem equipamento"
 
-            equipment_text = ", ".join(equipment) if equipment else "sem equipamento (peso corporal)"
-
-            prompt = f"""Crie um plano de treino detalhado em português com estas especificações:
+            prompt = f"""Crie um plano de treino detalhado em português:
 - Nível: {level} (beginner=iniciante, intermediate=intermediário, advanced=avançado)
 - Objetivo: {goal} (strength=força, endurance=resistência, hypertrophy=hipertrofia, balance=equilíbrio)
-- Equipamentos disponíveis: {equipment_text}
+- Equipamentos: {equipment_text}
 - Duração: {duration_days} dias
 
 Retorne um JSON com este formato:
 {{
-  "summary": "resumo do plano em 2 frases",
+  "summary": "resumo em 2 frases",
   "days": [
     {{
       "day": 1,
-      "focus": "grupo muscular ou tipo de treino",
+      "focus": "grupo muscular",
       "duration_min": 0,
       "exercises": [
-        {{"name": "exercício", "sets": 0, "reps": "0-0", "rest_sec": 0, "notes": "observação"}}
+        {{"name": "exercicio", "sets": 0, "reps": "0-0", "rest_sec": 0, "notes": "observacao"}}
       ]
     }}
   ],
@@ -213,17 +205,21 @@ Retorne um JSON com este formato:
 }}
 Retorne APENAS o JSON, sem texto adicional."""
 
-            response = model.generate_content(prompt)
-            text = response.text.strip()
+            response = await client.chat.completions.create(
+                model=settings.XAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-            if text.startswith("```"):
+            text = response.choices[0].message.content.strip()
+            if "```" in text:
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
 
             plan = json.loads(text)
+            logger.info(f"Plano de treino gerado para {user_id}: {level}, {goal}")
 
-            result = {
+            return {
                 "id": f"workout_{user_id[:8]}_{int(datetime.now().timestamp())}",
                 "user_id": user_id,
                 "level": level,
@@ -232,11 +228,7 @@ Retorne APENAS o JSON, sem texto adicional."""
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            logger.info(f"Plano de treino gerado para user {user_id}: {level}, {goal}")
-            return result
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Gemini retornou JSON inválido: {e}")
+        except json.JSONDecodeError:
             raise ValueError("Erro ao processar plano de treino")
         except Exception as e:
             logger.error(f"Erro ao gerar plano de treino: {e}")
@@ -246,64 +238,59 @@ Retorne APENAS o JSON, sem texto adicional."""
 
     @staticmethod
     async def coach_chat(user_id: str, message: str) -> Dict:
-        """
-        Coach virtual conversacional.
-        Mantém histórico da conversa no Redis (últimas 10 mensagens).
-        """
+        """Coach virtual conversacional com histórico no Redis."""
         try:
-            model = _init_gemini()
+            client = _get_client()
 
-            # Busca histórico do Redis
             history_key = f"coach_history:{user_id}"
             history = []
             try:
                 cached_history = await redis_client.get(history_key)
                 if cached_history:
                     history = json.loads(cached_history)
-            except Exception as e:
-                logger.warning(f"Erro ao buscar histórico do coach: {e}")
+            except Exception:
+                pass
 
-            # Monta conversa
-            system_prompt = """Você é o ZYRA Coach, um personal trainer e nutricionista virtual especializado.
-Você é motivador, direto e baseado em ciência. Responda sempre em português.
-Dê conselhos práticos sobre treino, nutrição e saúde. Seja conciso (máximo 3 parágrafos).
-Ao final, sugira 2-3 ações práticas que o usuário pode tomar."""
+            messages = [
+                {
+                    "role": "system",
+                    "content": """Você é o ZYRA Coach, personal trainer e nutricionista virtual.
+Seja motivador, direto e baseado em ciência. Responda sempre em português.
+Máximo 3 parágrafos. Ao final, sugira 2-3 ações práticas numeradas.""",
+                }
+            ]
 
-            # Formata histórico para o Gemini
-            chat_history = []
-            for h in history[-10:]:  # últimas 10 mensagens
-                chat_history.append({"role": h["role"], "parts": [h["content"]]})
+            for h in history[-6:]:
+                messages.append({"role": h["role"], "content": h["content"]})
 
-            chat = model.start_chat(history=chat_history)
-            full_message = f"{system_prompt}\n\nUsuário: {message}"
-            response = chat.send_message(full_message)
-            reply = response.text
+            messages.append({"role": "user", "content": message})
 
-            # Extrai sugestões (últimas linhas com bullets)
+            response = await client.chat.completions.create(
+                model=settings.XAI_MODEL,
+                messages=messages,
+            )
+
+            reply = response.choices[0].message.content.strip()
+
             suggestions = []
-            lines = reply.split("\n")
-            for line in lines:
+            for line in reply.split("\n"):
                 line = line.strip()
-                if line.startswith(("•", "-", "*", "1.", "2.", "3.")):
-                    clean = line.lstrip("•-*123. ").strip()
+                if line and line[0].isdigit() and len(line) > 2 and line[1] in ".)":
+                    clean = line[2:].strip()
                     if clean:
                         suggestions.append(clean)
 
-            # Salva histórico
             history.append({"role": "user", "content": message})
-            history.append({"role": "model", "content": reply})
-            history = history[-20:]  # mantém últimas 20 mensagens
+            history.append({"role": "assistant", "content": reply})
+            history = history[-20:]
 
             try:
-                await redis_client.set(history_key, json.dumps(history), ttl=86400)  # 24h
-            except Exception as e:
-                logger.warning(f"Erro ao salvar histórico do coach: {e}")
+                await redis_client.set(history_key, json.dumps(history), ttl=86400)
+            except Exception:
+                pass
 
-            logger.info(f"Coach respondeu para user {user_id}")
-            return {
-                "response": reply,
-                "suggestions": suggestions[:3],
-            }
+            logger.info(f"Coach respondeu para {user_id}")
+            return {"response": reply, "suggestions": suggestions[:3]}
 
         except Exception as e:
             logger.error(f"Erro no coach: {e}")
