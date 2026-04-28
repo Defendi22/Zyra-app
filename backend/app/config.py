@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # ==================== xAI GROK ====================
     XAI_API_KEY: str = ""
     XAI_MODEL: str = "grok-3-mini"
-    XAI_VISION_MODEL: str = "grok-2-vision-1212"
+    XAI_VISION_MODEL: str = "grok-4.20"
 
     # ==================== STORAGE ====================
     R2_ACCOUNT_ID: str = ""
